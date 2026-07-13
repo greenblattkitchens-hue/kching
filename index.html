@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>תקציב משותף</title>
+<meta name="theme-color" content="#17614A">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=Suez+One&display=swap" rel="stylesheet">
 
 <style>
@@ -314,6 +318,21 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
     <label class="f-label">API Key</label>
     <input id="claudeApiKey" type="password" placeholder="Anthropic API Key (sk-ant-...)" onchange="localStorage.claudeApiKey=this.value.trim()">
 
+    <div id="walletSection" style="display:none">
+      <hr class="sep">
+      <h3>💳 זיהוי הוצאות אוטומטי</h3>
+      <p class="hint-line" style="font-size:12px;color:var(--muted);margin:4px 0 8px">
+        מזהה תשלומים מהתראות Google Wallet ו-SMS ומציע להוסיף אותם כהוצאה.
+        המידע מעובד במכשיר בלבד ולא נשלח לשום מקום.
+      </p>
+      <div id="walletStatus" style="font-size:13px;font-weight:600;margin-bottom:6px">בודק מצב...</div>
+      <button class="secondary" id="walletEnableBtn" onclick="walletOpenSettings()">🔓 הפעלת גישה להתראות</button>
+      <details class="raw">
+        <summary>מצב למידה — התראות אחרונות שנתפסו</summary>
+        <div id="walletLog" style="font-size:12px;color:var(--muted);padding:6px 0">אין עדיין נתונים</div>
+      </details>
+    </div>
+
     <hr class="sep">
     <h3>💰 הגדרות תקציב</h3>
     <label class="f-label">תקרה שבועית (₪)</label>
@@ -323,6 +342,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 
     <button onclick="saveToCloud(); switchTab('tab-home');" style="margin-top:20px;">💾 שמירת הגדרות לענן</button>
     <button class="danger" onclick="resetEntryDataOnly()">🗑️ איפוס נתוני הוצאות</button>
+    <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:14px">Kaching · גרסה <span id="appVersion">--</span></div>
   </div>
 </div>
 
@@ -360,13 +380,15 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
+const APP_VERSION = "2.0.0";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
-let editContext = null; // { mode:'edit'|'new', key, index }
+let editContext = null; // { mode:'edit'|'new', key, index, walletId }
 
 document.getElementById('manualDate').valueAsDate = new Date();
-initApp();
+/* initApp() is invoked at the very end of this script — after every const/function
+   below (incl. the Wallet bridge) is defined, to avoid TDZ errors on load. */
 
 function initApp(){
   const fields = ['userName','userEmail','apiKey','binId','weeklyLimit','monthlyLimit','claudeApiKey'];
@@ -374,14 +396,40 @@ function initApp(){
 
   updateUserDisplay();
   loadData();
+  const verEl = document.getElementById('appVersion');
+  if(verEl) verEl.innerText = APP_VERSION;
 
-  if(localStorage.apiKey && localStorage.binId){
+  if(!navigator.onLine){
+    setSync("📴 מצב לא מקוון — הנתונים נשמרים במכשיר ויסונכרנו כשיחזור חיבור");
+  } else if(localStorage.apiKey && localStorage.binId){
     setSync("🔄 מושך נתונים מהענן...");
     loadFromCloud();
   } else {
     setSync("⚠️ ענן לא מוגדר — הנתונים נשמרים במכשיר זה בלבד");
   }
   setInterval(checkForUpdates, 60000);
+  initOffline();
+  walletInit();
+}
+
+/* =========================================================
+   OFFLINE MODE — service worker + reconnect auto-sync
+========================================================= */
+function initOffline(){
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  window.addEventListener('offline', () => {
+    setSync("📴 מצב לא מקוון — הנתונים נשמרים במכשיר ויסונכרנו כשיחזור חיבור");
+  });
+  window.addEventListener('online', () => {
+    if(localStorage.apiKey && localStorage.binId){
+      setSync("🔄 חזר חיבור — מסנכרן...");
+      saveToCloud(true);
+    } else {
+      setSync("✅ חזר חיבור לאינטרנט");
+    }
+  });
 }
 
 function setSync(msg){ document.getElementById('syncStatus').innerText = msg; }
@@ -541,12 +589,14 @@ function openEditEntry(key, index, scope){
 }
 
 function openScanConfirm(data){
-  editContext = { mode:'new' };
-  document.getElementById('modalTitle').innerText = "אישור קבלה שנסרקה";
-  document.getElementById('modalHint').innerText = "בדקו שהפרטים נכונים לפני שמירה.";
+  editContext = { mode:'new', walletId: data.walletId || null };
+  document.getElementById('modalTitle').innerText = data.walletId ? "אישור תשלום שזוהה" : "אישור קבלה שנסרקה";
+  document.getElementById('modalHint').innerText = data.hint || "בדקו שהפרטים נכונים לפני שמירה.";
   document.getElementById('modalDesc').value = data.desc || "סריקת קבלה";
   document.getElementById('modalAmount').value = data.amount || "";
-  document.querySelector('input[name="modalType"][value="weekly"]').checked = true;
+  // merchant memory: preselect the type this business was categorized as before
+  const remembered = getMerchantPref(data.desc);
+  document.querySelector(`input[name="modalType"][value="${remembered || 'weekly'}"]`).checked = true;
   let d = new Date();
   if(data.date && !isNaN(new Date(data.date))) d = new Date(data.date);
   document.getElementById('modalDate').value = toDateInput(d);
@@ -554,7 +604,17 @@ function openScanConfirm(data){
   document.getElementById('entryModalBackdrop').classList.add('open');
 }
 
-function closeEntryModal(){ document.getElementById('entryModalBackdrop').classList.remove('open'); editContext = null; }
+function closeEntryModal(){
+  const walletId = editContext && editContext.walletId;
+  document.getElementById('entryModalBackdrop').classList.remove('open');
+  editContext = null;
+  if(walletId){
+    markWalletProcessed(walletId);
+    if(WalletBridge) WalletBridge.clearPending({ id: walletId }).catch(() => {});
+  }
+  walletActive = false;
+  setTimeout(walletShowNext, 400);
+}
 
 function saveEntryModal(){
   if(!editContext) return;
@@ -586,6 +646,7 @@ function saveEntryModal(){
   target.push(newLine);
   setLines(targetKey, target);
 
+  if(editContext.mode === 'new' && desc) setMerchantPref(desc, type);
   closeEntryModal();
   afterDataChange("נשמר בהצלחה ✅");
 }
@@ -718,6 +779,12 @@ async function processReceipt(event){
   const file = event.target.files[0];
   if(!file) return;
 
+  if(!navigator.onLine){
+    showToast("סריקת קבלות דורשת חיבור לאינטרנט 📴 — אפשר להזין ידנית");
+    event.target.value = '';
+    return;
+  }
+
   const apiKey = (document.getElementById('claudeApiKey').value || localStorage.claudeApiKey || '').trim();
   if(!apiKey){
     showToast("יש להגדיר מפתח Claude API בהגדרות ❌");
@@ -824,6 +891,179 @@ function normalizeTime(val){
   }
   const m24 = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(str);
   return m24 ? `${m24[1].padStart(2, '0')}:${m24[2]}` : null;
+}
+
+/* =========================================================
+   WALLET DETECTION — bridge to the native notification listener
+   (active only inside the Android app; browser users never see it)
+========================================================= */
+const WalletBridge = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Wallet)
+  ? window.Capacitor.Plugins.Wallet : null;
+
+/* Pushed into the native listener on every launch — so detection rules are
+   tuned HERE (cloud-updated, no new APK needed). The native side only does a
+   rough pre-filter; precise parsing happens below in parseWalletNotification. */
+const WALLET_FILTERS = {
+  packages: [
+    "com.google.android.apps.walletnfcrel",   // Google Wallet
+    "com.google.android.apps.messaging",      // Google Messages (SMS)
+    "com.samsung.android.messaging",          // Samsung Messages (SMS)
+    "com.android.mms"
+  ].join(","),
+  keywords: ["שילמת","תשלום","עסקה","חיוב","חויב","קבלה","חשבונית","אושר","שולם","ע\"ס"].join(",")
+};
+
+let walletQueue = [];
+let walletActive = false;
+
+async function walletInit(){
+  if(!WalletBridge) return;
+  document.getElementById('walletSection').style.display = 'block';
+  try{ await WalletBridge.updateFilters(WALLET_FILTERS); }catch(e){}
+  try{ WalletBridge.addListener('captured', item => walletEnqueue(item)); }catch(e){}
+  document.addEventListener('visibilitychange', () => { if(!document.hidden) walletCheckPending(); });
+  renderWalletLog();
+  refreshWalletStatus();
+  walletCheckPending();
+}
+
+async function refreshWalletStatus(){
+  try{
+    const res = await WalletBridge.isEnabled();
+    const el = document.getElementById('walletStatus');
+    const btn = document.getElementById('walletEnableBtn');
+    if(res.enabled){
+      el.innerHTML = "🟢 פעיל — תשלומים מזוהים אוטומטית";
+      btn.style.display = 'none';
+      try{ WalletBridge.requestNotifPermission(); }catch(e){}
+    } else {
+      el.innerHTML = "🔴 לא פעיל — נדרש אישור חד-פעמי בהגדרות אנדרואיד";
+      btn.style.display = 'flex';
+    }
+  }catch(e){}
+}
+
+async function walletOpenSettings(){
+  try{ await WalletBridge.openSettings(); }catch(e){}
+}
+
+async function walletCheckPending(){
+  if(!WalletBridge) return;
+  refreshWalletStatus();
+  try{
+    const res = await WalletBridge.getPending();
+    (res.items || []).forEach(item => walletEnqueue(item));
+  }catch(e){}
+}
+
+function walletEnqueue(item){
+  if(!item || !item.id) return;
+  if(walletQueue.some(q => q.id === item.id)) return;
+  if(isWalletProcessed(item.id)) return;
+  walletQueue.push(item);
+  walletLogItem(item);
+  walletShowNext();
+}
+
+function walletShowNext(){
+  if(walletActive || !walletQueue.length) return;
+  if(document.getElementById('entryModalBackdrop').classList.contains('open')) return;
+  walletActive = true;
+  const item = walletQueue.shift();
+  const parsed = parseWalletNotification(item);
+  const when = item.time ? new Date(item.time) : new Date();
+  openScanConfirm({
+    amount: parsed.amount,
+    date: when.toISOString(),
+    time: `${String(when.getHours()).padStart(2,'0')}:${String(when.getMinutes()).padStart(2,'0')}`,
+    desc: parsed.desc,
+    walletId: item.id,
+    hint: "💳 זוהה תשלום מהתראה — בדקו את הפרטים ואשרו"
+  });
+}
+
+/* Best-effort extraction of amount + merchant from a payment notification.
+   Formats vary by bank/app — the learning log in settings shows the raw text
+   of every captured notification so these patterns can be tuned over time. */
+function parseWalletNotification(item){
+  const full = ((item.title || '') + ' | ' + (item.text || '')).replace(/\s+/g, ' ').trim();
+  let amount = null;
+  const m = full.match(/₪\s*(\d{1,5}(?:[.,]\d{1,2})?)/) ||
+            full.match(/(\d{1,5}(?:[.,]\d{2}))\s*(?:₪|ש"ח|שח)/) ||
+            full.match(/(?:על סך|ע"ס|סך|סכום)[^\d]{0,8}(\d{1,5}(?:[.,]\d{1,2})?)/);
+  if(m) amount = parseFloat(m[1].replace(',', '.'));
+  else{
+    const any = full.match(/\d{1,5}[.,]\d{2}/);
+    if(any) amount = parseFloat(any[0].replace(',', '.'));
+  }
+  if(amount !== null && !(amount > 0 && amount < 100000)) amount = null;
+
+  let desc = null;
+  const pats = [
+    /(?:אצל|מאת|בבית העסק|בית עסק)\s*[:\-]?\s*([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|$))/,
+    /(?:^|\s)ב-\s?([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|$))/,
+    /(?:at|from)\s+([A-Za-z0-9'&.\s]{2,28}?)(?=\s*(?:\||,|\.|$))/i
+  ];
+  for(const p of pats){ const mm = full.match(p); if(mm){ desc = mm[1].trim(); break; } }
+  if(!desc && item.package && item.package.indexOf('wallet') !== -1){
+    desc = (item.text || '').split('\n')[0].trim() || null;
+  }
+  return { amount, desc: desc ? desc.slice(0, 25) : "תשלום שזוהה" };
+}
+
+/* Already-handled notification ids — so the same payment is never offered twice */
+function isWalletProcessed(id){
+  try{ return JSON.parse(localStorage._walletDone || '[]').includes(id); }catch(e){ return false; }
+}
+function markWalletProcessed(id){
+  try{
+    const arr = JSON.parse(localStorage._walletDone || '[]');
+    if(!arr.includes(id)) arr.push(id);
+    while(arr.length > 200) arr.shift();
+    localStorage._walletDone = JSON.stringify(arr);
+  }catch(e){}
+}
+
+/* Learning mode — keep the raw text of recent captures for tuning */
+function walletLogItem(item){
+  try{
+    const parsed = parseWalletNotification(item);
+    const arr = JSON.parse(localStorage._walletLog || '[]');
+    arr.unshift({ t: item.time || Date.now(), pkg: item.package, title: item.title, text: item.text, amount: parsed.amount, desc: parsed.desc });
+    while(arr.length > 15) arr.pop();
+    localStorage._walletLog = JSON.stringify(arr);
+    renderWalletLog();
+  }catch(e){}
+}
+function renderWalletLog(){
+  const el = document.getElementById('walletLog');
+  if(!el) return;
+  let arr = [];
+  try{ arr = JSON.parse(localStorage._walletLog || '[]'); }catch(e){}
+  if(!arr.length){ el.innerText = "אין עדיין נתונים — ההתראות הבאות שייתפסו יופיעו כאן"; return; }
+  el.innerHTML = arr.map(x => `<div style="border-bottom:1px solid var(--border);padding:6px 0">
+    <div style="color:var(--ink)"><b>${escapeHtml(x.title || '')}</b> ${escapeHtml(x.text || '')}</div>
+    <div>פוענח: ${x.amount != null ? x.amount + ' ₪' : 'ללא סכום'} · ${escapeHtml(x.desc || '')} · ${new Date(x.t).toLocaleString('he-IL')}</div>
+  </div>`).join('');
+}
+
+/* Merchant memory — remember weekly/monthly choice per business */
+function normalizeMerchant(s){ return (s || '').replace(/\s+/g, ' ').trim(); }
+function getMerchantPref(desc){
+  try{
+    const p = JSON.parse(localStorage._merchantPrefs || '{}');
+    const v = p[normalizeMerchant(desc)];
+    return (v && v.type) || null;
+  }catch(e){ return null; }
+}
+function setMerchantPref(desc, type){
+  const key = normalizeMerchant(desc);
+  if(!key || key === "הוצאה" || key === "תשלום שזוהה" || key === "סריקת קבלה") return;
+  try{
+    const p = JSON.parse(localStorage._merchantPrefs || '{}');
+    p[key] = { type };
+    localStorage._merchantPrefs = JSON.stringify(p);
+  }catch(e){}
 }
 
 /* =========================================================
@@ -1040,7 +1280,7 @@ function drawYearChart(){
 
 function resetEntryDataOnly(){
   if(confirm("לאפס את כל ההוצאות? (ההגדרות יישמרו)")){
-    const keep = ['apiKey','binId','weeklyLimit','monthlyLimit','userName','userEmail','claudeApiKey'];
+    const keep = ['apiKey','binId','weeklyLimit','monthlyLimit','userName','userEmail','claudeApiKey','_merchantPrefs','_walletDone','_walletLog'];
     const saved = {}; keep.forEach(k => saved[k] = localStorage.getItem(k));
     localStorage.clear();
     keep.forEach(k => { if(saved[k] !== null) localStorage.setItem(k, saved[k]); });
@@ -1054,6 +1294,8 @@ function showToast(m, duration){
   clearTimeout(t._hideTimer);
   t._hideTimer = setTimeout(() => t.className = "", duration || 3000);
 }
+
+initApp();
 </script>
 </body>
 </html>
