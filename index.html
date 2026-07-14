@@ -327,6 +327,11 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
       </p>
       <div id="walletStatus" style="font-size:13px;font-weight:600;margin-bottom:6px">בודק מצב...</div>
       <button class="secondary" id="walletEnableBtn" onclick="walletOpenSettings()">🔓 הפעלת גישה להתראות</button>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin-top:10px;cursor:pointer">
+        <input type="checkbox" id="walletDiagToggle" style="width:auto;margin:0" onchange="walletToggleDiag(this.checked)">
+        מצב אבחון — תפיסת כל התראה עם סכום
+      </label>
+      <button class="secondary" onclick="walletSelfTest()">🧪 בדיקת מערכת (הוצאה מדומה)</button>
       <details class="raw">
         <summary>מצב למידה — התראות אחרונות שנתפסו</summary>
         <div id="walletLog" style="font-size:12px;color:var(--muted);padding:6px 0">אין עדיין נתונים</div>
@@ -380,7 +385,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -905,12 +910,16 @@ const WalletBridge = (window.Capacitor && window.Capacitor.Plugins && window.Cap
    rough pre-filter; precise parsing happens below in parseWalletNotification. */
 const WALLET_FILTERS = {
   packages: [
+    "com.google.android.gms",                 // Google Play Services — posts the actual tap-to-pay notifications!
     "com.google.android.apps.walletnfcrel",   // Google Wallet
     "com.google.android.apps.messaging",      // Google Messages (SMS)
     "com.samsung.android.messaging",          // Samsung Messages (SMS)
     "com.android.mms"
   ].join(","),
-  keywords: ["שילמת","תשלום","עסקה","חיוב","חויב","קבלה","חשבונית","אושר","שולם","ע\"ס"].join(",")
+  keywords: [
+    "שילמת","תשלום","עסקה","חיוב","חויב","קבלה","חשבונית","אושר","שולם","ע\"ס",
+    "paid","payment","purchase","charged","Visa","Mastercard","ויזה","מאסטרקארד"
+  ].join(",")
 };
 
 let walletQueue = [];
@@ -919,7 +928,10 @@ let walletActive = false;
 async function walletInit(){
   if(!WalletBridge) return;
   document.getElementById('walletSection').style.display = 'block';
-  try{ await WalletBridge.updateFilters(WALLET_FILTERS); }catch(e){}
+  const diag = localStorage._walletDiag === '1';
+  const diagEl = document.getElementById('walletDiagToggle');
+  if(diagEl) diagEl.checked = diag;
+  try{ await WalletBridge.updateFilters(Object.assign({}, WALLET_FILTERS, { captureAll: diag })); }catch(e){}
   try{ WalletBridge.addListener('captured', item => walletEnqueue(item)); }catch(e){}
   document.addEventListener('visibilitychange', () => { if(!document.hidden) walletCheckPending(); });
   renderWalletLog();
@@ -936,6 +948,8 @@ async function refreshWalletStatus(){
       el.innerHTML = "🟢 פעיל — תשלומים מזוהים אוטומטית";
       btn.style.display = 'none';
       try{ WalletBridge.requestNotifPermission(); }catch(e){}
+      // Nudge Android to (re)bind the listener — cures the granted-but-not-connected quirk
+      try{ WalletBridge.rebind(); }catch(e){}
     } else {
       el.innerHTML = "🔴 לא פעיל — נדרש אישור חד-פעמי בהגדרות אנדרואיד";
       btn.style.display = 'flex';
@@ -945,6 +959,21 @@ async function refreshWalletStatus(){
 
 async function walletOpenSettings(){
   try{ await WalletBridge.openSettings(); }catch(e){}
+}
+
+async function walletToggleDiag(on){
+  localStorage._walletDiag = on ? '1' : '0';
+  try{ await WalletBridge.updateFilters(Object.assign({}, WALLET_FILTERS, { captureAll: on })); }catch(e){}
+  showToast(on ? "🔍 מצב אבחון פעיל — כל התראה עם סכום תיתפס ותוצג במצב למידה" : "מצב אבחון כובה", 4500);
+}
+
+async function walletSelfTest(){
+  try{
+    await WalletBridge.injectTest();
+    showToast("🧪 נשלחה הוצאה מדומה — אמור להיפתח חלון אישור");
+  }catch(e){
+    showToast("שגיאה בבדיקה — ודאו שהאפליקציה מעודכנת ❌");
+  }
 }
 
 async function walletCheckPending(){
@@ -1005,7 +1034,8 @@ function parseWalletNotification(item){
     /(?:at|from)\s+([A-Za-z0-9'&.\s]{2,28}?)(?=\s*(?:\||,|\.|$))/i
   ];
   for(const p of pats){ const mm = full.match(p); if(mm){ desc = mm[1].trim(); break; } }
-  if(!desc && item.package && item.package.indexOf('wallet') !== -1){
+  // Wallet + Play Services payment notifications usually carry the merchant as the text body
+  if(!desc && item.package && (item.package.indexOf('wallet') !== -1 || item.package.indexOf('com.google.android.gms') !== -1)){
     desc = (item.text || '').split('\n')[0].trim() || null;
   }
   return { amount, desc: desc ? desc.slice(0, 25) : "תשלום שזוהה" };
@@ -1280,7 +1310,7 @@ function drawYearChart(){
 
 function resetEntryDataOnly(){
   if(confirm("לאפס את כל ההוצאות? (ההגדרות יישמרו)")){
-    const keep = ['apiKey','binId','weeklyLimit','monthlyLimit','userName','userEmail','claudeApiKey','_merchantPrefs','_walletDone','_walletLog'];
+    const keep = ['apiKey','binId','weeklyLimit','monthlyLimit','userName','userEmail','claudeApiKey','_merchantPrefs','_walletDone','_walletLog','_walletDiag'];
     const saved = {}; keep.forEach(k => saved[k] = localStorage.getItem(k));
     localStorage.clear();
     keep.forEach(k => { if(saved[k] !== null) localStorage.setItem(k, saved[k]); });
