@@ -187,11 +187,12 @@ details.raw summary{ font-size:12.5px; font-weight:600; color:var(--muted); curs
   transform:translateX(-50%); opacity:0; transition:opacity .3s, bottom .3s; font-size:14px;
 }
 #toast.show{ visibility:visible; opacity:1; bottom:46px; }
-#updateAlert{
+#updateAlert, #appUpdateBanner{
   display:none; position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:150;
   background:var(--accent); color:#3B2A08; padding:9px 18px; border-radius:30px;
   box-shadow:0 6px 18px rgba(0,0,0,.25); cursor:pointer; font-weight:700; font-size:13px; width:90%; max-width:560px; text-align:center;
 }
+#appUpdateBanner{ background:var(--primary); color:#fff; top:52px; }
 
 canvas{ width:100% !important; }
 .page{ display:none; }
@@ -221,6 +222,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 </header>
 
 <div id="updateAlert" onclick="loadFromCloud()">🔔 עדכון זמין מבן/בת הזוג — לחצו לרענון</div>
+<div id="appUpdateBanner" onclick="applyAppUpdate()">🚀 גרסה חדשה של Kaching מוכנה — לחצו לעדכון</div>
 <div id="syncStatus" class="sync-status">טוען נתונים...</div>
 
 <!-- ============ HOME ============ -->
@@ -385,7 +387,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.1.1";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -434,7 +436,44 @@ function initOffline(){
     } else {
       setSync("✅ חזר חיבור לאינטרנט");
     }
+    checkAppUpdate();
   });
+  document.addEventListener('visibilitychange', () => { if(!document.hidden) checkAppUpdate(); });
+  if(navigator.onLine) checkAppUpdate();
+}
+
+/* Version check against the cloud — shows an explicit "update ready" banner.
+   Needed because the WebView rarely re-navigates on its own, so the service
+   worker's background refresh would otherwise apply only on a rare cold start. */
+async function checkAppUpdate(){
+  try{
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if(!r.ok) return;
+    const j = await r.json();
+    if(j.version && j.version !== APP_VERSION){
+      document.getElementById('appUpdateBanner').style.display = 'block';
+    }
+  }catch(e){}
+}
+
+/* Pull the fresh shell into every kaching cache, then reload into it */
+async function applyAppUpdate(){
+  const banner = document.getElementById('appUpdateBanner');
+  banner.innerText = "⏳ מעדכן...";
+  try{
+    const fresh = await fetch('./index.html', { cache: 'reload' });
+    if(fresh.ok){
+      const keys = await caches.keys();
+      for(const k of keys){
+        if(k.indexOf('kaching') === 0){
+          const c = await caches.open(k);
+          await c.put('./index.html', fresh.clone());
+          await c.put('./', fresh.clone());
+        }
+      }
+    }
+  }catch(e){}
+  location.reload();
 }
 
 function setSync(msg){ document.getElementById('syncStatus').innerText = msg; }

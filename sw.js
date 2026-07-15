@@ -3,12 +3,15 @@
    instantly (even fully offline), and a fresh copy is fetched in the background
    so the NEXT open runs the newest deployed version. API calls (JSONBin,
    Anthropic) are never intercepted. */
-const CACHE = 'kaching-v1';
+const CACHE = 'kaching-v2';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      // {cache:'reload'} bypasses the HTTP cache — a new SW always installs fresh files
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
