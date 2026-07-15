@@ -387,7 +387,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.1.1";
+const APP_VERSION = "2.1.2";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -953,7 +953,11 @@ const WALLET_FILTERS = {
     "com.google.android.apps.walletnfcrel",   // Google Wallet
     "com.google.android.apps.messaging",      // Google Messages (SMS)
     "com.samsung.android.messaging",          // Samsung Messages (SMS)
-    "com.android.mms"
+    "com.android.mms",
+    "com.google.android.gm",                  // Gmail — payment-confirmation emails
+    "com.samsung.android.spay",               // Samsung Pay / Samsung Wallet
+    "com.bnhp.payments.paymentsapp",          // bit
+    "com.payboxapp"                           // PayBox
   ].join(","),
   keywords: [
     "שילמת","תשלום","עסקה","חיוב","חויב","קבלה","חשבונית","אושר","שולם","ע\"ס",
