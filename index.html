@@ -387,7 +387,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.1.2";
+const APP_VERSION = "2.1.3";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -962,7 +962,8 @@ const WALLET_FILTERS = {
   keywords: [
     "שילמת","תשלום","עסקה","חיוב","חויב","קבלה","חשבונית","אושר","שולם","ע\"ס",
     "paid","payment","purchase","charged","Visa","Mastercard","ויזה","מאסטרקארד"
-  ].join(",")
+  ].join(","),
+  moneyMarkers: ["₪","ש\"ח","שח","NIS","ILS"].join(",")
 };
 
 let walletQueue = [];
