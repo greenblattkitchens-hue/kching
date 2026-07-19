@@ -390,7 +390,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.3.0";
+const APP_VERSION = "2.3.1";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -1138,9 +1138,10 @@ function parseWalletNotification(item){
 
   let desc = null;
   const pats = [
-    /(?:אצל|מאת|בבית העסק|בית עסק)\s*[:\-]?\s*([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|$))/,
-    /(?:^|\s)ב-\s?([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|$))/,
-    /(?:at|from)\s+([A-Za-z0-9'&.\s]{2,28}?)(?=\s*(?:\||,|\.|$))/i
+    /(?:בבית העסק|בית העסק|בית עסק)\s*[:\-]?\s*([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|:|;|$))/,
+    /(?:אצל|מאת)\s*[:\-]?\s*([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|:|;|$))/,
+    /(?:^|\s)ב-\s?([֐-׿A-Za-z0-9'"&\s]{2,28}?)(?=\s*(?:\||,|\.|:|;|$))/,
+    /(?:at|from)\s+([A-Za-z0-9'&.\s]{2,28}?)(?=\s*(?:\||,|\.|:|;|$))/i
   ];
   for(const p of pats){ const mm = full.match(p); if(mm){ desc = mm[1].trim(); break; } }
   // Wallet + Play Services payment notifications usually carry the merchant as the text body
