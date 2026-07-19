@@ -390,7 +390,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.3.1";
+const APP_VERSION = "2.3.2";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -975,6 +975,15 @@ let walletActive = false;
 async function walletInit(){
   if(!WalletBridge) return;
   document.getElementById('walletSection').style.display = 'block';
+  /* One-time migration (v2.3.2): diagnostic mode did its discovery job — force it
+     off so only payment-looking notifications surface from here on. */
+  if(localStorage._diagAutoOff !== '1'){
+    localStorage._diagAutoOff = '1';
+    if(localStorage._walletDiag === '1'){
+      localStorage._walletDiag = '0';
+      showToast("✨ מצב האבחון כובה אוטומטית — מעכשיו ייתפסו רק התראות שנראות כמו תשלום", 6000);
+    }
+  }
   const diag = localStorage._walletDiag === '1';
   const diagEl = document.getElementById('walletDiagToggle');
   if(diagEl) diagEl.checked = diag;
@@ -1098,8 +1107,15 @@ function walletEnqueue(item){
   if(!item || !item.id) return;
   if(walletQueue.some(q => q.id === item.id)) return;
   if(isWalletProcessed(item.id)) return;
-  walletQueue.push(item);
   walletLogItem(item);
+  // Diagnostic captures with no recognizable amount are for learning only —
+  // never interrupt the user with a popup for them.
+  if(localStorage._walletDiag === '1' && parseWalletNotification(item).amount === null){
+    markWalletProcessed(item.id);
+    if(WalletBridge) WalletBridge.clearPending({ id: item.id }).catch(() => {});
+    return;
+  }
+  walletQueue.push(item);
   walletShowNext();
 }
 
