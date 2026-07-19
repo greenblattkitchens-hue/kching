@@ -390,7 +390,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.3.2";
+const APP_VERSION = "2.4.0";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -658,6 +658,10 @@ function closeEntryModal(){
   if(walletId){
     markWalletProcessed(walletId);
     if(WalletBridge) WalletBridge.clearPending({ id: walletId }).catch(() => {});
+    // Last pending expense handled → dismiss the system prompt from the status bar
+    if(WalletBridge && WalletBridge.cancelPrompts && !walletQueue.length){
+      WalletBridge.cancelPrompts().catch(() => {});
+    }
   }
   walletActive = false;
   setTimeout(walletShowNext, 400);
@@ -999,8 +1003,31 @@ async function walletInit(){
 /* Pull path: sweep the status bar on every app open, then collect the queue.
    MIUI-proof — captures receipts even when real-time push events are blocked. */
 async function walletAutoScan(){
+  /* Recover from a stale in-flight flag (e.g., app was swiped away mid-confirm):
+     the flag must mirror reality — modal actually open or not. */
+  walletActive = document.getElementById('entryModalBackdrop').classList.contains('open');
   try{ await WalletBridge.scanActive(); }catch(e){}
   walletCheckPending();
+}
+
+/* Cross-channel duplicate guard: the same payment often arrives twice
+   (Wallet + SMS, or SMS + Gmail). Same amount within 20 minutes → auto-skip. */
+function isRecentDuplicate(amount, time){
+  if(amount == null) return false;
+  try{
+    const arr = JSON.parse(localStorage._walletRecent || '[]');
+    const t = time || Date.now();
+    return arr.some(r => Math.abs(r.a - amount) < 0.01 && Math.abs(t - r.t) < 20 * 60 * 1000);
+  }catch(e){ return false; }
+}
+function rememberRecentAmount(amount, time){
+  if(amount == null) return;
+  try{
+    const arr = JSON.parse(localStorage._walletRecent || '[]');
+    arr.push({ a: amount, t: time || Date.now() });
+    while(arr.length > 30) arr.shift();
+    localStorage._walletRecent = JSON.stringify(arr);
+  }catch(e){}
 }
 
 async function walletScanActive(){
@@ -1108,15 +1135,33 @@ function walletEnqueue(item){
   if(walletQueue.some(q => q.id === item.id)) return;
   if(isWalletProcessed(item.id)) return;
   walletLogItem(item);
+  const parsed = parseWalletNotification(item);
   // Diagnostic captures with no recognizable amount are for learning only —
   // never interrupt the user with a popup for them.
-  if(localStorage._walletDiag === '1' && parseWalletNotification(item).amount === null){
-    markWalletProcessed(item.id);
-    if(WalletBridge) WalletBridge.clearPending({ id: item.id }).catch(() => {});
+  if(localStorage._walletDiag === '1' && parsed.amount === null){
+    walletDiscard(item.id);
     return;
   }
+  // Same payment reported by two channels (Wallet+SMS / SMS+Gmail) — keep the first
+  if(isRecentDuplicate(parsed.amount, item.time)){
+    walletDiscard(item.id);
+    showToast(`⏭️ ${parsed.amount} ₪ כבר נקלט מערוץ אחר — הכפילות דולגה`, 4000);
+    return;
+  }
+  rememberRecentAmount(parsed.amount, item.time);
   walletQueue.push(item);
   walletShowNext();
+}
+
+function walletDiscard(id){
+  markWalletProcessed(id);
+  if(WalletBridge){
+    WalletBridge.clearPending({ id: id }).catch(() => {});
+    // Dismiss the system prompt only if nothing else awaits handling
+    if(WalletBridge.cancelPrompts && !walletQueue.length && !walletActive){
+      WalletBridge.cancelPrompts().catch(() => {});
+    }
+  }
 }
 
 function walletShowNext(){
