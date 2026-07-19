@@ -335,6 +335,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
       </label>
       <button class="secondary" onclick="walletSelfTest()">🧪 בדיקת מערכת (הוצאה מדומה)</button>
       <div id="walletDiag" style="font-size:12.5px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:10px;line-height:1.7">בודק...</div>
+      <button class="secondary" onclick="walletScanActive()" style="margin-top:8px">🩺 סריקת התראות קיימות בשורת המצב</button>
       <button class="secondary" onclick="walletRefreshDiag(true)" style="margin-top:8px">🔄 רענון אבחון (אחרי שליחת התראה)</button>
       <details class="raw">
         <summary>מצב למידה — התראות אחרונות שנתפסו</summary>
@@ -389,7 +390,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.2.2";
+const APP_VERSION = "2.3.0";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -979,9 +980,31 @@ async function walletInit(){
   if(diagEl) diagEl.checked = diag;
   try{ await WalletBridge.updateFilters(Object.assign({}, WALLET_FILTERS, { captureAll: diag })); }catch(e){}
   try{ WalletBridge.addListener('captured', item => walletEnqueue(item)); }catch(e){}
-  document.addEventListener('visibilitychange', () => { if(!document.hidden){ walletCheckPending(); walletRefreshDiag(false); } });
+  document.addEventListener('visibilitychange', () => { if(!document.hidden){ walletAutoScan(); walletRefreshDiag(false); } });
   renderWalletLog();
   refreshWalletStatus();
+  walletAutoScan();
+  walletRefreshDiag(false);
+}
+
+/* Pull path: sweep the status bar on every app open, then collect the queue.
+   MIUI-proof — captures receipts even when real-time push events are blocked. */
+async function walletAutoScan(){
+  try{ await WalletBridge.scanActive(); }catch(e){}
+  walletCheckPending();
+}
+
+async function walletScanActive(){
+  try{
+    const res = await WalletBridge.scanActive();
+    if(res.bound === false){
+      showToast("השירות לא מחובר — כבו והדליקו את ההרשאה ⚠️", 5000);
+    } else {
+      showToast(`🩺 נסרקו ${res.scanned} התראות מהשורה — מה שרלוונטי ייתפס`, 4500);
+    }
+  }catch(e){
+    showToast("סריקה לא זמינה — עדכנו את ה-APK ❌", 4500);
+  }
   walletCheckPending();
   walletRefreshDiag(false);
 }
@@ -994,25 +1017,28 @@ async function walletRefreshDiag(showToastMsg){
   try{
     const d = await WalletBridge.getDiag();
     const fmt = t => t ? new Date(t).toLocaleString('he-IL') : '—';
-    const connectedNow = d.connectedAt > 0 && d.connectedAt >= (d.disconnectedAt || 0);
+    /* liveBound (v2.3+ APK) is a direct query against the running service — the only
+       trustworthy signal. Pref timestamps survive process death and can lie. */
+    const hasLiveProbe = typeof d.liveBound === 'boolean';
+    const connectedNow = hasLiveProbe ? d.liveBound : (d.connectedAt > 0 && d.connectedAt >= (d.disconnectedAt || 0));
     let verdict, color;
     if(!d.listed){ verdict = "❌ אין הרשאת גישה להתראות — לחצו על כפתור ההפעלה"; color = "#D64545"; }
-    else if(!d.connectedAt){ verdict = "⚠️ ההרשאה רשומה אך אנדרואיד מעולם לא חיבר את השירות.<br>התיקון: לחצו על הכפתור למטה ← כבו את Kaching ← הדליקו מחדש ← חזרו לכאן.<br>בשיאומי: הפעילו גם 'הפעלה אוטומטית' (Autostart) לאפליקציה."; color = "#E8A33D"; }
-    else if(!connectedNow){ verdict = "⚠️ השירות התחבר בעבר אך מנותק כרגע — שיאומי כנראה סגרה אותו.<br>כבו והדליקו שוב את ההרשאה, וודאו: 'הפעלה אוטומטית' דלוק + סוללה 'ללא הגבלות'."; color = "#E8A33D"; }
-    else if(d.seenCount === 0){ verdict = "🟡 השירות מחובר וממתין להתראה הראשונה.<br>חשוב: נספרות רק התראות חדשות שהגיעו אחרי שעת החיבור — צרו עכשיו התראה חדשה (מייל/הודעה), חכו שתופיע למעלה, ואז לחצו רענון."; color = "#B8860B"; }
+    else if(!connectedNow){ verdict = "⚠️ ההרשאה רשומה אך השירות לא מחובר בפועל כרגע.<br>התיקון: לחצו על הכפתור למטה ← כבו את Kaching ← הדליקו מחדש ← חזרו לכאן.<br>בשיאומי חובה גם: 'הפעלה אוטומטית' (Autostart) דלוק + סוללה 'ללא הגבלות'."; color = "#E8A33D"; }
+    else if(d.seenCount === 0){ verdict = "🟡 החיבור חי ואמיתי (נבדק ישירות מול השירות) — אך אירועים בזמן-אמת עדיין לא הגיעו.<br>לחצו על '🩺 סריקת התראות קיימות' כדי לתפוס את מה שכבר בשורת המצב."; color = "#B8860B"; }
     else { verdict = `🟢 השירות פעיל וקיבל ${d.seenCount} התראות`; color = "#17614A"; }
     // In the broken states, re-show the settings button as the fix entry point
     const fixBtn = document.getElementById('walletEnableBtn');
-    if(fixBtn && d.listed && (!d.connectedAt || !connectedNow)){
+    if(fixBtn && d.listed && !connectedNow){
       fixBtn.style.display = 'flex';
       fixBtn.innerHTML = "🔧 פתיחת ההגדרות — כבו והדליקו שם את Kaching";
     }
     el.innerHTML =
       `<div style="font-weight:700;color:${color};margin-bottom:6px">${verdict}</div>` +
       `<div>מאזין רשום: ${d.listed ? 'כן' : 'לא'} · אנדרואיד SDK ${d.sdk}</div>` +
-      `<div>מחובר כרגע: <b>${connectedNow ? 'כן ✓' : 'לא ✗'}</b></div>` +
+      `<div>חיבור חי (בדיקה ישירה): <b>${hasLiveProbe ? (d.liveBound ? 'כן ✓' : 'לא ✗') : 'לא זמין — עדכנו APK'}</b></div>` +
+      (hasLiveProbe && d.liveBound ? `<div>התראות בשורת המצב כרגע: <b>${d.activeCount}</b></div>` : '') +
       `<div>התחבר: ${fmt(d.connectedAt)} · התנתק: ${fmt(d.disconnectedAt)}</div>` +
-      `<div>התראות שנקלטו (סה"כ): <b>${d.seenCount}</b></div>` +
+      `<div>אירועים שנדחפו בזמן-אמת (סה"כ): <b>${d.seenCount}</b></div>` +
       `<div>התראה אחרונה: ${d.lastSeenPkg || '—'} · ${fmt(d.lastSeenAt)}</div>` +
       `<div>מצב אבחון: ${d.captureAll ? 'דלוק' : 'כבוי'}</div>`;
     if(showToastMsg){
