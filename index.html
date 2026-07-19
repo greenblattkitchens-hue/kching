@@ -389,7 +389,7 @@ hr.sep{ border:none; border-top:1px solid var(--border); margin:16px 0 4px; }
 /* =========================================================
    STATE
 ========================================================= */
-const APP_VERSION = "2.2.1";
+const APP_VERSION = "2.2.2";
 let currentWeekDate = new Date();
 let currentMonthDate = new Date();
 let lastKnownUpdate = null;
@@ -994,21 +994,24 @@ async function walletRefreshDiag(showToastMsg){
   try{
     const d = await WalletBridge.getDiag();
     const fmt = t => t ? new Date(t).toLocaleString('he-IL') : '—';
+    const connectedNow = d.connectedAt > 0 && d.connectedAt >= (d.disconnectedAt || 0);
     let verdict, color;
     if(!d.listed){ verdict = "❌ אין הרשאת גישה להתראות — לחצו על כפתור ההפעלה"; color = "#D64545"; }
     else if(!d.connectedAt){ verdict = "⚠️ ההרשאה רשומה אך אנדרואיד מעולם לא חיבר את השירות.<br>התיקון: לחצו על הכפתור למטה ← כבו את Kaching ← הדליקו מחדש ← חזרו לכאן.<br>בשיאומי: הפעילו גם 'הפעלה אוטומטית' (Autostart) לאפליקציה."; color = "#E8A33D"; }
-    else if(d.seenCount === 0){ verdict = "⚠️ השירות מחובר אך לא קיבל אף התראה — כנראה חיסכון סוללה חוסם (הגדרות ← אפליקציות ← Kaching ← סוללה ← ללא הגבלות)"; color = "#E8A33D"; }
+    else if(!connectedNow){ verdict = "⚠️ השירות התחבר בעבר אך מנותק כרגע — שיאומי כנראה סגרה אותו.<br>כבו והדליקו שוב את ההרשאה, וודאו: 'הפעלה אוטומטית' דלוק + סוללה 'ללא הגבלות'."; color = "#E8A33D"; }
+    else if(d.seenCount === 0){ verdict = "🟡 השירות מחובר וממתין להתראה הראשונה.<br>חשוב: נספרות רק התראות חדשות שהגיעו אחרי שעת החיבור — צרו עכשיו התראה חדשה (מייל/הודעה), חכו שתופיע למעלה, ואז לחצו רענון."; color = "#B8860B"; }
     else { verdict = `🟢 השירות פעיל וקיבל ${d.seenCount} התראות`; color = "#17614A"; }
-    // In the never-connected state, re-show the settings button as the fix entry point
+    // In the broken states, re-show the settings button as the fix entry point
     const fixBtn = document.getElementById('walletEnableBtn');
-    if(fixBtn && d.listed && !d.connectedAt){
+    if(fixBtn && d.listed && (!d.connectedAt || !connectedNow)){
       fixBtn.style.display = 'flex';
       fixBtn.innerHTML = "🔧 פתיחת ההגדרות — כבו והדליקו שם את Kaching";
     }
     el.innerHTML =
       `<div style="font-weight:700;color:${color};margin-bottom:6px">${verdict}</div>` +
       `<div>מאזין רשום: ${d.listed ? 'כן' : 'לא'} · אנדרואיד SDK ${d.sdk}</div>` +
-      `<div>התחבר לראשונה: ${fmt(d.connectedAt)}</div>` +
+      `<div>מחובר כרגע: <b>${connectedNow ? 'כן ✓' : 'לא ✗'}</b></div>` +
+      `<div>התחבר: ${fmt(d.connectedAt)} · התנתק: ${fmt(d.disconnectedAt)}</div>` +
       `<div>התראות שנקלטו (סה"כ): <b>${d.seenCount}</b></div>` +
       `<div>התראה אחרונה: ${d.lastSeenPkg || '—'} · ${fmt(d.lastSeenAt)}</div>` +
       `<div>מצב אבחון: ${d.captureAll ? 'דלוק' : 'כבוי'}</div>`;
